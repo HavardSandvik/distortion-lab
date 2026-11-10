@@ -79,8 +79,9 @@
     <label>Input signal</label>
     <select id="source">
       <option value="sine" selected>Pure sine wave</option>
-      <option value="guitar">Guitar-like note (with harmonics)</option>
+      <option value="guitar">Plucked string (physics model)</option>
     </select>
+    <p class="small" id="srcNote"></p>
 
     <label>Note</label>
     <select id="note">
@@ -122,7 +123,7 @@
         <canvas id="spec" height="240"></canvas>
         <div class="stats">
           <span>Harmonics above 1%: <b id="hCount">–</b></span>
-          <span>Distortion (THD): <b id="thd">–</b></span>
+          <span title="Strength of all harmonics above the fundamental, relative to the fundamental (THD)">Harmonic content: <b id="thd">–</b></span>
         </div>
         <p class="small" id="specNote"></p>
       </div>
@@ -169,7 +170,14 @@
   }
 
   // Input waveform (one period, phase 0..1)
-  const GUITAR = [1, 0.55, 0.35, 0.22, 0.15, 0.1, 0.07, 0.05, 0.03, 0.02];
+  // Plucked-string model: string plucked 1/5 of the way along (PLUCK), heard at a pickup 0.15 along (PICKUP).
+  // Harmonic k amplitude = sin(k*pi*PLUCK) * sin(k*pi*PICKUP) / k^2, with gentle damping of high harmonics.
+  // Released from rest, so every harmonic is a cosine. Harmonics 5, 10, 15 vanish: there is a node at the pluck point.
+  const PLUCK = 0.2, PICKUP = 0.15;
+  const GUITAR = Array.from({ length: 24 }, (_, i) => {
+    const k = i + 1;
+    return Math.sin(k * Math.PI * PLUCK) * Math.sin(k * Math.PI * PICKUP) / (k * k) * Math.exp(-k / 5);
+  });
   const guitarNorm = (() => {
     let m = 0;
     for (let i = 0; i < N; i++) { const v = guitarRaw(i / N); m = Math.max(m, Math.abs(v)); }
@@ -177,7 +185,7 @@
   })();
   function guitarRaw(p) {
     let s = 0;
-    for (let k = 0; k < GUITAR.length; k++) s += GUITAR[k] * Math.sin(2 * Math.PI * (k + 1) * p + k * 0.4);
+    for (let k = 0; k < GUITAR.length; k++) s += GUITAR[k] * Math.cos(2 * Math.PI * (k + 1) * p);
     return s;
   }
   function input(p) {
@@ -383,6 +391,9 @@
   function render() {
     compute();
     $('explain').innerHTML = EXPLAIN[state.mode];
+    $('srcNote').textContent = state.source === 'sine'
+      ? 'A single frequency: the simplest possible sound.'
+      : 'A string plucked 1/5 of the way along. Real plucked strings make lopsided waves like this. Harmonic 5 is missing because the string can\'t vibrate at a frequency that needs a still point where it was plucked.';
     if (animating()) return; // live loop is drawing
     drawWaveStatic();
     drawSpec(inH, outH);
@@ -436,8 +447,7 @@
     const real = new Float32Array(n), imag = new Float32Array(n);
     if (state.source === 'sine') imag[1] = 1;
     else for (let k = 0; k < GUITAR.length; k++) {
-      real[k + 1] = GUITAR[k] * Math.sin(k * 0.4) / guitarNorm;
-      imag[k + 1] = GUITAR[k] * Math.cos(k * 0.4) / guitarNorm;
+      real[k + 1] = GUITAR[k] / guitarNorm;
     }
     return ac.createPeriodicWave(real, imag, { disableNormalization: true });
   }
