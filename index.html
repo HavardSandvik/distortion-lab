@@ -399,7 +399,24 @@
     for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = state.mode === 'clean' ? x : fx(x); }
     return c;
   }
+  // iOS: Web Audio is muted by the silent switch unless the page is treated as media playback.
+  let unlockEl;
+  function iosUnlock(type) {
+    try { if (navigator.audioSession) navigator.audioSession.type = type; } catch (e) {}
+    if (!navigator.audioSession && !unlockEl) {
+      // Older iOS: playing a (silent) <audio> element switches the session to playback.
+      const sr = 8000, n = 800, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+      const w = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+      w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true);
+      v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true);
+      v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+      unlockEl = new Audio(URL.createObjectURL(new Blob([buf], { type: 'audio/wav' })));
+      unlockEl.loop = true; unlockEl.setAttribute('playsinline', '');
+      unlockEl.play().catch(() => {});
+    }
+  }
   function ensureAC() {
+    iosUnlock(live ? 'play-and-record' : 'playback');
     if (!ac) {
       ac = new (window.AudioContext || window.webkitAudioContext)();
       shaper = ac.createWaveShaper(); shaper.oversample = '4x';
@@ -425,7 +442,7 @@
     return ac.createPeriodicWave(real, imag, { disableNormalization: true });
   }
   function startTone() {
-    ensureAC(); ac.resume();
+    ensureAC(); if (ac.state !== 'running') ac.resume();
     stopTone(true);
     const o = ac.createOscillator();
     o.setPeriodicWave(periodicWave());
@@ -462,7 +479,7 @@
       return;
     }
     try {
-      ensureAC(); await ac.resume();
+      iosUnlock('play-and-record'); ensureAC(); await ac.resume();
       micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
       micSrc = ac.createMediaStreamSource(micStream);
       micSrc.connect(analyserIn); micSrc.connect(shaper);
