@@ -207,8 +207,11 @@
   // ---------- Canvas helpers ----------
   function setup(c) {
     const dpr = window.devicePixelRatio || 1;
-    const w = c.clientWidth, h = +c.getAttribute('height');
-    if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; c.style.height = h + 'px'; }
+    if (!c.dataset.h) c.dataset.h = c.getAttribute('height'); // CSS height, before DPR scaling
+    const w = c.clientWidth, h = +c.dataset.h;
+    if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+      c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); c.style.height = h + 'px';
+    }
     const ctx = c.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
