@@ -112,7 +112,7 @@
       <div class="legend">
         <span><i style="background:var(--clean)"></i>Input (scaled to fit)</span>
         <span><i style="background:var(--out)"></i>Output after effect</span>
-        <span id="liveTag" style="display:none;color:var(--accent)">● LIVE input</span>
+        <span id="liveTag" style="display:none;color:var(--accent)">● LIVE</span>
       </div>
     </div>
 
@@ -124,12 +124,12 @@
           <span>Harmonics above 1%: <b id="hCount">–</b></span>
           <span>Distortion (THD): <b id="thd">–</b></span>
         </div>
-        <p class="small">Bar <i>n</i> = frequency <i>n</i> × the note. Blue outline = input, orange = output.</p>
+        <p class="small" id="specNote"></p>
       </div>
       <div class="panel">
         <h2>Transfer curve — input → output</h2>
         <canvas id="curve" height="240"></canvas>
-        <p class="small">A straight line means no change (clean). Bending or flattening at the ends is clipping.</p>
+        <p class="small">A straight line means no change (clean). Bending or flattening at the ends is clipping. While playing, the bright trace shows which part of the curve the sound is using: watch it shrink back to the straight middle as a plucked note fades.</p>
       </div>
     </div>
   </section>
@@ -234,7 +234,7 @@
     ctx.stroke();
   }
 
-  // ---------- Static (synth) drawing ----------
+  // ---------- Static (theory) drawing ----------
   let inArr, outArr, inH, outH;
   function compute() {
     inArr = periodSamples(input);
@@ -243,27 +243,35 @@
     outH = harmonics(outArr);
   }
 
-  function drawWave(liveIn, liveOut) {
+  // scale: number = fixed scale for both traces; null = auto-fit each
+  function drawWave(wIn, wOut, scale) {
     const { ctx, w, h } = setup($('wave'));
     grid(ctx, w, h);
-    if (liveIn) {
-      let m = 1e-6; for (const v of liveIn) m = Math.max(m, Math.abs(v));
-      plotLine(ctx, w, h, liveIn, css('--clean'), 0.9 / m, 1.5);
-      let mo = 1e-6; for (const v of liveOut) mo = Math.max(mo, Math.abs(v));
-      plotLine(ctx, w, h, liveOut, css('--out'), 0.9 / mo);
-      return;
-    }
-    // show two periods
-    const two = a => Float64Array.from({ length: 2 * N }, (_, i) => a[i % N]);
-    plotLine(ctx, w, h, two(inArr), css('--clean'), 0.9, 1.5);
-    let m = 0; for (const v of outArr) m = Math.max(m, Math.abs(v));
-    // clean: scale output to show gain visually but clamp to fit
-    const sc = state.mode === 'clean' ? 0.9 : 0.9 / Math.max(m, 1e-6);
-    plotLine(ctx, w, h, two(outArr), css('--out'), sc);
+    const fit = a => { let m = 1e-4; for (const v of a) m = Math.max(m, Math.abs(v)); return 0.9 / m; };
+    plotLine(ctx, w, h, wIn, css('--clean'), scale ?? fit(wIn), 1.5);
+    plotLine(ctx, w, h, wOut, css('--out'), scale ?? fit(wOut));
     if (state.mode !== 'clean') {
-      ctx.fillStyle = css('--muted'); ctx.font = '12px system-ui';
+      ctx.fillStyle = css('--muted'); ctx.font = '12px system-ui'; ctx.textAlign = 'left';
       ctx.fillText('flat tops = clipping', 8, h - 8);
     }
+  }
+  function drawWaveStatic() {
+    const two = a => Float64Array.from({ length: 2 * N }, (_, i) => a[i % N]);
+    let m = 0; for (const v of outArr) m = Math.max(m, Math.abs(v));
+    const { ctx, w, h } = setup($('wave'));
+    grid(ctx, w, h);
+    plotLine(ctx, w, h, two(inArr), css('--clean'), 0.9, 1.5);
+    plotLine(ctx, w, h, two(outArr), css('--out'), state.mode === 'clean' ? 0.9 : 0.9 / Math.max(m, 1e-6));
+    if (state.mode !== 'clean') {
+      ctx.fillStyle = css('--muted'); ctx.font = '12px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText('flat tops = clipping', 8, h - 8);
+    }
+  }
+
+  function setStats(oH) {
+    const max = Math.max(...oH, 1e-12), fund = oH[0] || 1e-12;
+    $('hCount').textContent = oH.filter(v => v / max > 0.01).length;
+    $('thd').textContent = (Math.sqrt(oH.slice(1).reduce((s, v) => s + v * v, 0)) / fund * 100).toFixed(1) + '%';
   }
 
   function drawSpec(iH, oH) {
@@ -275,8 +283,7 @@
       const x = 5 + k * bw;
       const ho = (oH[k] / max) * (h - pad - 8);
       const hi = (iH[k] / max) * (h - pad - 8);
-      ctx.fillStyle = css('--out');
-      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = css('--out'); ctx.globalAlpha = 0.9;
       ctx.fillRect(x + bw * 0.18, h - pad - ho, bw * 0.64, ho);
       ctx.globalAlpha = 1;
       ctx.strokeStyle = css('--clean'); ctx.lineWidth = 1.5;
@@ -284,47 +291,109 @@
       ctx.fillStyle = css('--muted');
       ctx.fillText(k + 1, x + bw / 2, h - 6);
     }
-    const fund = oH[0] || 1e-9;
-    const count = oH.filter(v => v / max > 0.01).length;
-    const thd = Math.sqrt(oH.slice(1).reduce((s, v) => s + v * v, 0)) / fund;
-    $('hCount').textContent = count;
-    $('thd').textContent = (thd * 100).toFixed(1) + '%';
+    setStats(oH);
   }
 
-  function drawCurve() {
+  // Live spectrum analyser: log frequency axis, dB vertical
+  const F_LO = 40, F_HI = 8000, DB_LO = -100, DB_HI = 0;
+  function drawSpecLive(fIn, fOut, f0) {
+    const { ctx, w, h } = setup($('spec'));
+    const pad = 22, sr = ac.sampleRate, binHz = sr / (2 * fOut.length);
+    const xOf = f => (Math.log(f / F_LO) / Math.log(F_HI / F_LO)) * w;
+    const yOf = db => {
+      const v = Math.max(DB_LO, Math.min(DB_HI, isFinite(db) ? db : DB_LO));
+      return (h - pad) - ((v - DB_LO) / (DB_HI - DB_LO)) * (h - pad - 6);
+    };
+    // frequency grid
+    ctx.font = '10px system-ui'; ctx.textAlign = 'center';
+    for (const f of [50, 100, 200, 500, 1000, 2000, 5000]) {
+      const x = xOf(f);
+      ctx.strokeStyle = '#1d2129'; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h - pad); ctx.stroke();
+      ctx.fillStyle = css('--muted'); ctx.fillText(f >= 1000 ? f / 1000 + 'k' : f, x, h - 6);
+    }
+    // harmonic markers
+    if (f0) {
+      ctx.fillStyle = '#5a6170';
+      for (let k = 1; k * f0 < F_HI && k <= 16; k++) {
+        const x = xOf(k * f0);
+        ctx.strokeStyle = 'rgba(255,138,61,0.15)'; ctx.setLineDash([2, 3]);
+        ctx.beginPath(); ctx.moveTo(x, 12); ctx.lineTo(x, h - pad); ctx.stroke(); ctx.setLineDash([]);
+        if (k <= 8) ctx.fillText(k, x, 10);
+      }
+    }
+    const path = arr => {
+      ctx.beginPath();
+      let started = false;
+      for (let i = 1; i < arr.length; i++) {
+        const f = i * binHz; if (f < F_LO) continue; if (f > F_HI) break;
+        const x = xOf(f), y = yOf(arr[i]);
+        started ? ctx.lineTo(x, y) : (ctx.moveTo(x, y), started = true);
+      }
+    };
+    // output filled
+    path(fOut); ctx.lineTo(w, h - pad); ctx.lineTo(xOf(F_LO), h - pad); ctx.closePath();
+    ctx.fillStyle = 'rgba(255,138,61,0.25)'; ctx.fill();
+    path(fOut); ctx.strokeStyle = css('--out'); ctx.lineWidth = 1.8; ctx.stroke();
+    path(fIn); ctx.strokeStyle = css('--clean'); ctx.lineWidth = 1.2; ctx.stroke();
+
+    // live harmonic stats (only when we know the note)
+    if (f0) {
+      const amps = [];
+      for (let k = 1; k <= HARM; k++) {
+        const c = Math.round(k * f0 / binHz); let m = -Infinity;
+        for (let j = c - 3; j <= c + 3; j++) if (j > 0 && j < fOut.length) m = Math.max(m, fOut[j]);
+        amps.push(m < -90 ? 0 : Math.pow(10, m / 20));
+      }
+      setStats(amps);
+    } else { $('hCount').textContent = '–'; $('thd').textContent = '–'; }
+  }
+
+  function drawCurve(liveIn, liveOut) {
     const { ctx, w, h } = setup($('curve'));
     grid(ctx, w, h);
     ctx.strokeStyle = '#333a47'; ctx.beginPath(); ctx.moveTo(w / 2, 0); ctx.lineTo(w / 2, h); ctx.stroke();
-    // reference line y=x
     ctx.setLineDash([4, 4]); ctx.strokeStyle = '#3d4554';
     ctx.beginPath(); ctx.moveTo(0, h); ctx.lineTo(w, 0); ctx.stroke(); ctx.setLineDash([]);
-    ctx.strokeStyle = css('--out'); ctx.lineWidth = 2.5; ctx.beginPath();
+    const px = x => ((x + 1) / 2) * w, py = y => h / 2 - y * (h / 2 - 8);
+    ctx.strokeStyle = liveIn ? 'rgba(255,138,61,0.35)' : css('--out'); ctx.lineWidth = 2.5; ctx.beginPath();
     for (let i = 0; i <= 200; i++) {
       const x = -1 + (2 * i) / 200;
-      let y = state.mode === 'clean' ? Math.max(-1, Math.min(1, x)) : fx(x);
-      const px = ((x + 1) / 2) * w, py = h / 2 - y * (h / 2 - 8);
-      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+      const y = state.mode === 'clean' ? Math.max(-1, Math.min(1, x)) : fx(x);
+      i ? ctx.lineTo(px(x), py(y)) : ctx.moveTo(px(x), py(y));
     }
     ctx.stroke();
+    if (liveIn) {
+      // XY scope: each dot is one audio sample (input, output)
+      ctx.strokeStyle = css('--out'); ctx.lineWidth = 2; ctx.beginPath();
+      for (let i = 0; i < liveIn.length; i++) {
+        const x = px(Math.max(-1, Math.min(1, liveIn[i]))), y = py(liveOut[i]);
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }
+      ctx.stroke();
+    }
     ctx.fillStyle = css('--muted'); ctx.font = '11px system-ui';
     ctx.textAlign = 'right'; ctx.fillText('input →', w - 6, h / 2 - 6);
     ctx.textAlign = 'left'; ctx.fillText('↑ output', w / 2 + 6, 14);
   }
 
+  const animating = () => raf != null;
   function render() {
     compute();
-    if (!live) drawWave();
+    $('explain').innerHTML = EXPLAIN[state.mode];
+    if (animating()) return; // live loop is drawing
+    drawWaveStatic();
     drawSpec(inH, outH);
     drawCurve();
-    $('explain').innerHTML = EXPLAIN[state.mode];
+    $('liveTag').style.display = 'none';
+    $('specNote').innerHTML = 'Theory view. Bar <i>n</i> = frequency <i>n</i> × the note. Blue outline = input, orange = output. Press Play to see it live.';
   }
 
   // ---------- Audio ----------
-  let ac, osc, shaper, master, env, playing = false, live = null, analyserIn, analyserOut, raf;
+  let ac, osc, shaper, master, env, playing = false, live = null, analyserIn, analyserOut, raf = null;
+  let tIn, tOut, fIn, fOut;
   function curveData() {
-    const n = 2048, c = new Float32Array(n);
-    let m = 0;
-    for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = state.mode === 'clean' ? x : fx(x); m = Math.max(m, Math.abs(c[i])); }
+    const n = 4096, c = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = state.mode === 'clean' ? x : fx(x); }
     return c;
   }
   function ensureAC() {
@@ -332,8 +401,11 @@
       ac = new (window.AudioContext || window.webkitAudioContext)();
       shaper = ac.createWaveShaper(); shaper.oversample = '4x';
       master = ac.createGain(); master.gain.value = +$('vol').value;
-      analyserIn = ac.createAnalyser(); analyserIn.fftSize = 2048;
-      analyserOut = ac.createAnalyser(); analyserOut.fftSize = 2048;
+      analyserIn = ac.createAnalyser(); analyserOut = ac.createAnalyser();
+      for (const a of [analyserIn, analyserOut]) { a.fftSize = 8192; a.smoothingTimeConstant = 0.5; }
+      // tIn must hold enough to search for the lag
+      tIn = new Float32Array(8192); tOut = new Float32Array(8192);
+      fIn = new Float32Array(4096); fOut = new Float32Array(4096);
       shaper.connect(analyserOut); shaper.connect(master); master.connect(ac.destination);
     }
     shaper.curve = curveData();
@@ -352,24 +424,22 @@
   function startTone() {
     ensureAC(); ac.resume();
     stopTone(true);
-    osc = ac.createOscillator();
-    osc.setPeriodicWave(periodicWave());
-    osc.frequency.value = state.freq;
+    const o = ac.createOscillator();
+    o.setPeriodicWave(periodicWave());
+    o.frequency.value = state.freq;
     env = ac.createGain();
     const t = ac.currentTime;
     env.gain.setValueAtTime(0, t);
     env.gain.linearRampToValueAtTime(0.95, t + 0.005);
-    if ($('pluck').checked) env.gain.setTargetAtTime(0.0001, t + 0.05, 0.9);
-    osc.connect(env); env.connect(shaper);
-    osc.start();
-    if ($('pluck').checked) {
-      osc.stop(t + 4);
-      osc.onended = () => { if (playing && osc && osc.context.currentTime >= t + 3.9) setPlaying(false); };
-    }
+    if ($('pluck').checked) env.gain.setTargetAtTime(0.0001, t + 0.15, 1.2);
+    o.connect(env); env.connect(shaper); env.connect(analyserIn);
+    o.onended = () => { if (osc === o) { osc = null; setPlaying(false); } };
+    o.start(); if ($('pluck').checked) o.stop(t + 6); osc = o;
     setPlaying(true);
+    startLoop();
   }
   function stopTone(quiet) {
-    if (osc) { try { env.gain.setTargetAtTime(0, ac.currentTime, 0.02); osc.stop(ac.currentTime + 0.1); } catch (e) {} osc = null; }
+    if (osc) { const o = osc; osc = null; try { env.gain.setTargetAtTime(0, ac.currentTime, 0.02); o.stop(ac.currentTime + 0.1); } catch (e) {} }
     if (!quiet) setPlaying(false);
   }
   function setPlaying(p) {
@@ -378,33 +448,55 @@
     $('play').classList.toggle('playing', p);
   }
   $('play').onclick = () => playing ? stopTone() : startTone();
-  function retrigger() { if (playing && !$('pluck').checked && osc) { osc.setPeriodicWave(periodicWave()); osc.frequency.value = state.freq; } }
+  function retrigger() { if (playing && osc) { osc.setPeriodicWave(periodicWave()); osc.frequency.value = state.freq; } }
 
   // Live mic / guitar input
-  let micStream, micSrc, preGain;
+  let micStream, micSrc;
   $('mic').onclick = async () => {
-    if (live) { // stop
-      micStream.getTracks().forEach(t => t.stop()); micSrc.disconnect(); preGain.disconnect();
-      live = null; cancelAnimationFrame(raf); $('mic').textContent = '🎸 Use microphone / guitar input';
-      $('liveTag').style.display = 'none'; render(); return;
+    if (live) {
+      micStream.getTracks().forEach(t => t.stop()); micSrc.disconnect();
+      live = null; $('mic').textContent = '🎸 Use microphone / guitar input';
+      return;
     }
     try {
       ensureAC(); await ac.resume();
       micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
       micSrc = ac.createMediaStreamSource(micStream);
-      preGain = ac.createGain(); preGain.gain.value = 1;
-      micSrc.connect(analyserIn); micSrc.connect(preGain); preGain.connect(shaper);
-      live = true; $('mic').textContent = '■ Stop live input'; $('liveTag').style.display = 'inline';
-      loop();
+      micSrc.connect(analyserIn); micSrc.connect(shaper);
+      live = true; $('mic').textContent = '■ Stop live input';
+      startLoop();
     } catch (e) { alert('Could not access microphone: ' + e.message); }
   };
+
+  function startLoop() { if (raf == null) raf = requestAnimationFrame(loop); }
   function loop() {
-    const a = new Float32Array(analyserIn.fftSize), b = new Float32Array(analyserOut.fftSize);
-    analyserIn.getFloatTimeDomainData(a); analyserOut.getFloatTimeDomainData(b);
-    drawWave(a.slice(0, 1024), b.slice(0, 1024));
+    if (!playing && !live) { raf = null; render(); return; }
+    analyserIn.getFloatTimeDomainData(tIn); analyserOut.getFloatTimeDomainData(tOut);
+    const sr = ac.sampleRate;
+    const toneOnly = playing && !live;
+    const win = toneOnly ? Math.round(3 * sr / state.freq) : 2048;
+    // trigger: first rising zero crossing of the input, so the trace stands still
+    let peak = 1e-4; for (let i = 0; i < 4096; i++) peak = Math.max(peak, Math.abs(tIn[i]));
+    let start = 0, armed = false;
+    for (let i = 1; i < tIn.length - win; i++) {
+      if (tIn[i] < -0.2 * peak) armed = true;
+      if (armed && tIn[i - 1] < 0 && tIn[i] >= 0) { start = i; break; }
+    }
+    // align output with input: the effect adds a tiny processing delay
+    let lag = 0, best = -Infinity;
+    for (let L = 0; L <= 256 && start + L + win < tOut.length; L++) {
+      let c = 0; for (let i = start; i < start + win; i += 2) c += tIn[i] * tOut[i + L];
+      if (c > best) { best = c; lag = L; }
+    }
+    const wi = tIn.subarray(start, start + win), wo = tOut.subarray(start + lag, start + lag + win);
+    drawWave(wi, wo, toneOnly ? 0.9 : null);
+    analyserIn.getFloatFrequencyData(fIn); analyserOut.getFloatFrequencyData(fOut);
+    drawSpecLive(fIn, fOut, toneOnly ? state.freq : 0);
+    drawCurve(wi, wo);
+    $('liveTag').style.display = 'inline';
+    $('specNote').innerHTML = 'Live frequency analyser of the sound (log scale). Peaks at whole-number multiples of the note are the harmonics.';
     raf = requestAnimationFrame(loop);
   }
-  // In live mode, the shaper's input is the raw mic signal; gain is applied inside the curve via fx().
 
   // ---------- Controls ----------
   $('modes').onclick = e => {
