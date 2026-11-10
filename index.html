@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Distortion Lab — the physics of guitar distortion</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --line: #2a2f3a;
+    --text: #e8e6e1;
+    --muted: #9aa0ab;
+    --clean: #6cc4ff;
+    --out: #ff8a3d;
+    --accent: #ff8a3d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header { padding: 28px 24px 8px; max-width: 1200px; margin: 0 auto; }
+  h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--muted); margin: 4px 0 0; }
+  main { max-width: 1200px; margin: 0 auto; padding: 16px 24px 40px; display: grid; gap: 16px;
+    grid-template-columns: 300px 1fr; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .panel h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .modes button, .btn {
+    background: #1f232c; color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 8px; font: inherit; font-size: 15px; cursor: pointer;
+  }
+  .modes button.active { border-color: var(--accent); background: #2a1e15; color: #ffd2b0; }
+  .btn.primary { background: var(--accent); color: #1a0f05; border-color: var(--accent); font-weight: 600; width: 100%; }
+  .btn.primary.playing { background: #1f232c; color: var(--accent); }
+  .btn.wide { width: 100%; }
+  label { display: block; margin: 14px 0 4px; font-size: 14px; }
+  label output { float: right; color: var(--accent); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  select { width: 100%; background: #1f232c; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; }
+  .explain { margin-top: 14px; padding: 12px; background: #12151b; border-radius: 8px; border-left: 3px solid var(--accent); font-size: 14px; color: #cfcbc4; min-height: 110px; }
+  .explain b { color: var(--text); }
+  .stack { display: grid; gap: 16px; align-content: start; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 860px) { .two { grid-template-columns: 1fr; } }
+  canvas { width: 100%; display: block; border-radius: 8px; background: #0c0e12; }
+  .legend { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+  .stats { display: flex; gap: 20px; margin-top: 8px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+  .stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .small { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
+  .toggle { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Distortion <span>Lab</span></h1>
+  <p class="sub">Clipping a wave adds frequencies that weren't there before. Pick an effect, turn up the gain, and watch the harmonics appear.</p>
+</header>
+
+<main>
+  <aside class="panel">
+    <h2>Effect</h2>
+    <div class="modes" id="modes">
+      <button data-mode="clean" class="active">Clean</button>
+      <button data-mode="overdrive">Overdrive</button>
+      <button data-mode="distortion">Distortion</button>
+      <button data-mode="fuzz">Fuzz</button>
+    </div>
+
+    <label>Gain (drive) <output id="gainOut">1.0×</output></label>
+    <input type="range" id="gain" min="1" max="40" step="0.1" value="1">
+
+    <label>Input signal</label>
+    <select id="source">
+      <option value="sine" selected>Pure sine wave</option>
+      <option value="guitar">Guitar-like note (with harmonics)</option>
+    </select>
+
+    <label>Note</label>
+    <select id="note">
+      <option value="82.41">Low E (82 Hz)</option>
+      <option value="110" selected>A (110 Hz)</option>
+      <option value="146.83">D (147 Hz)</option>
+      <option value="196">G (196 Hz)</option>
+      <option value="329.63">High E (330 Hz)</option>
+    </select>
+
+    <div class="explain" id="explain"></div>
+
+    <hr>
+    <h2>Sound</h2>
+    <button class="btn primary" id="play">▶ Play tone</button>
+    <label>Volume <output id="volOut">30%</output></label>
+    <input type="range" id="vol" min="0" max="1" step="0.01" value="0.3">
+    <div class="toggle"><input type="checkbox" id="pluck" checked><label for="pluck" style="margin:0">Pluck (decaying note)</label></div>
+    <hr>
+    <h2>Live guitar</h2>
+    <button class="btn wide" id="mic">🎸 Use microphone / guitar input</button>
+    <p class="small">Plays your real guitar through the selected effect. Use headphones to avoid feedback.</p>
+  </aside>
+
+  <section class="stack">
+    <div class="panel">
+      <h2>Waveform — what the speaker cone does</h2>
+      <canvas id="wave" height="300"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--clean)"></i>Input (scaled to fit)</span>
+        <span><i style="background:var(--out)"></i>Output after effect</span>
+        <span id="liveTag" style="display:none;color:var(--accent)">● LIVE input</span>
+      </div>
+    </div>
+
+    <div class="two">
+      <div class="panel">
+        <h2>Spectrum — which frequencies are present</h2>
+        <canvas id="spec" height="240"></canvas>
+        <div class="stats">
+          <span>Harmonics above 1%: <b id="hCount">–</b></span>
+          <span>Distortion (THD): <b id="thd">–</b></span>
+        </div>
+        <p class="small">Bar <i>n</i> = frequency <i>n</i> × the note. Blue outline = input, orange = output.</p>
+      </div>
+      <div class="panel">
+        <h2>Transfer curve — input → output</h2>
+        <canvas id="curve" height="240"></canvas>
+        <p class="small">A straight line means no change (clean). Bending or flattening at the ends is clipping.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const state = { mode: 'clean', gain: 1, source: 'sine', freq: 110 };
+  const N = 1024; // samples per period for analysis
+  const HARM = 16; // harmonics in display
+
+  const EXPLAIN = {
+    clean: "<b>Clean.</b> The amplifier is linear: output = input × a constant. The wave keeps its shape, so no new frequencies are added. A pure sine stays a single frequency.",
+    overdrive: "<b>Overdrive — soft clipping.</b> As the wave gets bigger, the amp can't keep up and the peaks are gently <i>rounded off</i> (like a valve amp pushed hard). This adds a few odd harmonics, mostly the 3rd and 5th: warm and smooth.",
+    distortion: "<b>Distortion — hard clipping.</b> Above a threshold the signal is <i>cut flat</i>. The sharp corners need many high harmonics to describe them (3rd, 5th, 7th, 9th…), so it sounds aggressive and bright.",
+    fuzz: "<b>Fuzz — extreme, asymmetric clipping.</b> Driven so hard the wave becomes almost a square wave, and the top and bottom clip differently. Asymmetry adds <i>even</i> harmonics (2nd, 4th…) too, giving the buzzy, saturated fuzz sound."
+  };
+
+  // Transfer functions: x in roughly [-1,1] input (already multiplied by gain)
+  function shape(x, mode) {
+    switch (mode) {
+      case 'clean': return x;
+      case 'overdrive': return Math.tanh(x);
+      case 'distortion': return Math.max(-0.7, Math.min(0.7, x)) / 0.7;
+      case 'fuzz': {
+        // asymmetric: positive side clips hard and low, negative side softer
+        const y = x >= 0 ? Math.min(x * 2, 0.6) / 0.6 : Math.tanh(x * 1.2) * 0.85;
+        return y;
+      }
+    }
+  }
+  // normalise output so clean and effects have comparable loudness on screen
+  function fx(x) {
+    if (state.mode === 'clean') return x; // clean: keep amplitude = gain*input, scaled later
+    return shape(x * state.gain, state.mode);
+  }
+
+  // Input waveform (one period, phase 0..1)
+  const GUITAR = [1, 0.55, 0.35, 0.22, 0.15, 0.1, 0.07, 0.05, 0.03, 0.02];
+  const guitarNorm = (() => {
+    let m = 0;
+    for (let i = 0; i < N; i++) { const v = guitarRaw(i / N); m = Math.max(m, Math.abs(v)); }
+    return m;
+  })();
+  function guitarRaw(p) {
+    let s = 0;
+    for (let k = 0; k < GUITAR.length; k++) s += GUITAR[k] * Math.sin(2 * Math.PI * (k + 1) * p + k * 0.4);
+    return s;
+  }
+  function input(p) {
+    return state.source === 'sine' ? Math.sin(2 * Math.PI * p) : guitarRaw(p) / guitarNorm;
+  }
+
+  function periodSamples(fn) {
+    const a = new Float64Array(N);
+    for (let i = 0; i < N; i++) a[i] = fn(i / N);
+    return a;
+  }
+
+  // DFT magnitude of harmonics 1..HARM for a single-period signal
+  function harmonics(a) {
+    const out = [];
+    for (let k = 1; k <= HARM; k++) {
+      let re = 0, im = 0;
+      for (let i = 0; i < N; i++) {
+        const ph = 2 * Math.PI * k * i / N;
+        re += a[i] * Math.cos(ph); im -= a[i] * Math.sin(ph);
+      }
+      out.push(2 * Math.hypot(re, im) / N);
+    }
+    return out;
+  }
+
+  // ---------- Canvas helpers ----------
+  function setup(c) {
+    const dpr = window.devicePixelRatio || 1;
+    const w = c.clientWidth, h = +c.getAttribute('height');
+    if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; c.style.height = h + 'px'; }
+    const ctx = c.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    return { ctx, w, h };
+  }
+  const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+  function grid(ctx, w, h) {
+    ctx.strokeStyle = '#1d2129'; ctx.lineWidth = 1;
+    for (let i = 1; i < 8; i++) { const x = (w * i) / 8; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+    for (let i = 1; i < 4; i++) { const y = (h * i) / 4; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+    ctx.strokeStyle = '#333a47'; ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+  }
+
+  function plotLine(ctx, w, h, data, color, scale, width = 2.5) {
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = (i / (data.length - 1)) * w;
+      const y = h / 2 - data[i] * scale * (h / 2 - 12);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // ---------- Static (synth) drawing ----------
+  let inArr, outArr, inH, outH;
+  function compute() {
+    inArr = periodSamples(input);
+    outArr = inArr.map(fx);
+    inH = harmonics(inArr);
+    outH = harmonics(outArr);
+  }
+
+  function drawWave(liveIn, liveOut) {
+    const { ctx, w, h } = setup($('wave'));
+    grid(ctx, w, h);
+    if (liveIn) {
+      let m = 1e-6; for (const v of liveIn) m = Math.max(m, Math.abs(v));
+      plotLine(ctx, w, h, liveIn, css('--clean'), 0.9 / m, 1.5);
+      let mo = 1e-6; for (const v of liveOut) mo = Math.max(mo, Math.abs(v));
+      plotLine(ctx, w, h, liveOut, css('--out'), 0.9 / mo);
+      return;
+    }
+    // show two periods
+    const two = a => Float64Array.from({ length: 2 * N }, (_, i) => a[i % N]);
+    plotLine(ctx, w, h, two(inArr), css('--clean'), 0.9, 1.5);
+    let m = 0; for (const v of outArr) m = Math.max(m, Math.abs(v));
+    // clean: scale output to show gain visually but clamp to fit
+    const sc = state.mode === 'clean' ? 0.9 : 0.9 / Math.max(m, 1e-6);
+    plotLine(ctx, w, h, two(outArr), css('--out'), sc);
+    if (state.mode !== 'clean') {
+      ctx.fillStyle = css('--muted'); ctx.font = '12px system-ui';
+      ctx.fillText('flat tops = clipping', 8, h - 8);
+    }
+  }
+
+  function drawSpec(iH, oH) {
+    const { ctx, w, h } = setup($('spec'));
+    const n = iH.length, pad = 22, bw = (w - 10) / n;
+    const max = Math.max(...oH, ...iH, 1e-9);
+    ctx.font = '11px system-ui'; ctx.textAlign = 'center';
+    for (let k = 0; k < n; k++) {
+      const x = 5 + k * bw;
+      const ho = (oH[k] / max) * (h - pad - 8);
+      const hi = (iH[k] / max) * (h - pad - 8);
+      ctx.fillStyle = css('--out');
+      ctx.globalAlpha = 0.9;
+      ctx.fillRect(x + bw * 0.18, h - pad - ho, bw * 0.64, ho);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = css('--clean'); ctx.lineWidth = 1.5;
+      if (hi > 0.5) ctx.strokeRect(x + bw * 0.18, h - pad - hi, bw * 0.64, hi);
+      ctx.fillStyle = css('--muted');
+      ctx.fillText(k + 1, x + bw / 2, h - 6);
+    }
+    const fund = oH[0] || 1e-9;
+    const count = oH.filter(v => v / max > 0.01).length;
+    const thd = Math.sqrt(oH.slice(1).reduce((s, v) => s + v * v, 0)) / fund;
+    $('hCount').textContent = count;
+    $('thd').textContent = (thd * 100).toFixed(1) + '%';
+  }
+
+  function drawCurve() {
+    const { ctx, w, h } = setup($('curve'));
+    grid(ctx, w, h);
+    ctx.strokeStyle = '#333a47'; ctx.beginPath(); ctx.moveTo(w / 2, 0); ctx.lineTo(w / 2, h); ctx.stroke();
+    // reference line y=x
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = '#3d4554';
+    ctx.beginPath(); ctx.moveTo(0, h); ctx.lineTo(w, 0); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = css('--out'); ctx.lineWidth = 2.5; ctx.beginPath();
+    for (let i = 0; i <= 200; i++) {
+      const x = -1 + (2 * i) / 200;
+      let y = state.mode === 'clean' ? Math.max(-1, Math.min(1, x)) : fx(x);
+      const px = ((x + 1) / 2) * w, py = h / 2 - y * (h / 2 - 8);
+      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+    }
+    ctx.stroke();
+    ctx.fillStyle = css('--muted'); ctx.font = '11px system-ui';
+    ctx.textAlign = 'right'; ctx.fillText('input →', w - 6, h / 2 - 6);
+    ctx.textAlign = 'left'; ctx.fillText('↑ output', w / 2 + 6, 14);
+  }
+
+  function render() {
+    compute();
+    if (!live) drawWave();
+    drawSpec(inH, outH);
+    drawCurve();
+    $('explain').innerHTML = EXPLAIN[state.mode];
+  }
+
+  // ---------- Audio ----------
+  let ac, osc, shaper, master, env, playing = false, live = null, analyserIn, analyserOut, raf;
+  function curveData() {
+    const n = 2048, c = new Float32Array(n);
+    let m = 0;
+    for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = state.mode === 'clean' ? x : fx(x); m = Math.max(m, Math.abs(c[i])); }
+    return c;
+  }
+  function ensureAC() {
+    if (!ac) {
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      shaper = ac.createWaveShaper(); shaper.oversample = '4x';
+      master = ac.createGain(); master.gain.value = +$('vol').value;
+      analyserIn = ac.createAnalyser(); analyserIn.fftSize = 2048;
+      analyserOut = ac.createAnalyser(); analyserOut.fftSize = 2048;
+      shaper.connect(analyserOut); shaper.connect(master); master.connect(ac.destination);
+    }
+    shaper.curve = curveData();
+    return ac;
+  }
+  function periodicWave() {
+    const n = state.source === 'sine' ? 2 : GUITAR.length + 1;
+    const real = new Float32Array(n), imag = new Float32Array(n);
+    if (state.source === 'sine') imag[1] = 1;
+    else for (let k = 0; k < GUITAR.length; k++) {
+      real[k + 1] = GUITAR[k] * Math.sin(k * 0.4) / guitarNorm;
+      imag[k + 1] = GUITAR[k] * Math.cos(k * 0.4) / guitarNorm;
+    }
+    return ac.createPeriodicWave(real, imag, { disableNormalization: true });
+  }
+  function startTone() {
+    ensureAC(); ac.resume();
+    stopTone(true);
+    osc = ac.createOscillator();
+    osc.setPeriodicWave(periodicWave());
+    osc.frequency.value = state.freq;
+    env = ac.createGain();
+    const t = ac.currentTime;
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(0.95, t + 0.005);
+    if ($('pluck').checked) env.gain.setTargetAtTime(0.0001, t + 0.05, 0.9);
+    osc.connect(env); env.connect(shaper);
+    osc.start();
+    if ($('pluck').checked) {
+      osc.stop(t + 4);
+      osc.onended = () => { if (playing && osc && osc.context.currentTime >= t + 3.9) setPlaying(false); };
+    }
+    setPlaying(true);
+  }
+  function stopTone(quiet) {
+    if (osc) { try { env.gain.setTargetAtTime(0, ac.currentTime, 0.02); osc.stop(ac.currentTime + 0.1); } catch (e) {} osc = null; }
+    if (!quiet) setPlaying(false);
+  }
+  function setPlaying(p) {
+    playing = p;
+    $('play').textContent = p ? '■ Stop' : '▶ Play tone';
+    $('play').classList.toggle('playing', p);
+  }
+  $('play').onclick = () => playing ? stopTone() : startTone();
+  function retrigger() { if (playing && !$('pluck').checked && osc) { osc.setPeriodicWave(periodicWave()); osc.frequency.value = state.freq; } }
+
+  // Live mic / guitar input
+  let micStream, micSrc, preGain;
+  $('mic').onclick = async () => {
+    if (live) { // stop
+      micStream.getTracks().forEach(t => t.stop()); micSrc.disconnect(); preGain.disconnect();
+      live = null; cancelAnimationFrame(raf); $('mic').textContent = '🎸 Use microphone / guitar input';
+      $('liveTag').style.display = 'none'; render(); return;
+    }
+    try {
+      ensureAC(); await ac.resume();
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      micSrc = ac.createMediaStreamSource(micStream);
+      preGain = ac.createGain(); preGain.gain.value = 1;
+      micSrc.connect(analyserIn); micSrc.connect(preGain); preGain.connect(shaper);
+      live = true; $('mic').textContent = '■ Stop live input'; $('liveTag').style.display = 'inline';
+      loop();
+    } catch (e) { alert('Could not access microphone: ' + e.message); }
+  };
+  function loop() {
+    const a = new Float32Array(analyserIn.fftSize), b = new Float32Array(analyserOut.fftSize);
+    analyserIn.getFloatTimeDomainData(a); analyserOut.getFloatTimeDomainData(b);
+    drawWave(a.slice(0, 1024), b.slice(0, 1024));
+    raf = requestAnimationFrame(loop);
+  }
+  // In live mode, the shaper's input is the raw mic signal; gain is applied inside the curve via fx().
+
+  // ---------- Controls ----------
+  $('modes').onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    document.querySelectorAll('#modes button').forEach(x => x.classList.toggle('active', x === b));
+    state.mode = b.dataset.mode;
+    if (state.mode !== 'clean' && state.gain < 3) { state.gain = 6; $('gain').value = 6; }
+    update();
+  };
+  $('gain').oninput = e => { state.gain = +e.target.value; update(); };
+  $('source').onchange = e => { state.source = e.target.value; update(); retrigger(); };
+  $('note').onchange = e => { state.freq = +e.target.value; update(); retrigger(); };
+  $('vol').oninput = e => { $('volOut').textContent = Math.round(e.target.value * 100) + '%'; if (master) master.gain.value = +e.target.value; };
+  function update() {
+    $('gainOut').textContent = state.gain.toFixed(1) + '×';
+    if (shaper) shaper.curve = curveData();
+    render();
+  }
+  window.addEventListener('resize', render);
+  update();
+})();
+</script>
+</body>
+</html>
